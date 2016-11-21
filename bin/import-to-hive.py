@@ -6,6 +6,7 @@ import MySQLdb.cursors
 from datetime import datetime
 import shutil
 import magic
+import argparse
 
 sys.path.append('%s/../lib' %(os.path.dirname(__file__)))
 import metahivesettings.settings
@@ -13,7 +14,6 @@ import metahivesettings.settings
 #from metahive.scanners mport *
 import metahive.scanners
 
-registeredScanners = []
 regScan = {}
 scannersByMimetype = {}
 for name in metahive.scanners.__all__:
@@ -29,7 +29,6 @@ for name in metahive.scanners.__all__:
             if mimetype not in scannersByMimetype:
                 scannersByMimetype[mimetype] = []
             scannersByMimetype[mimetype].append(name)
-    registeredScanners.append(plugin)
     regScan[name] = plugin
 
 db_credentials = metahivesettings.settings.db_credentials()
@@ -37,8 +36,29 @@ db_credentials = metahivesettings.settings.db_credentials()
 #print registeredScanners
 #print scannersByMimetype
 
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-s", "--sourcedir", help="Top level directory to work on (e.g. /path/to/upload/folder", required=True)
+args = parser.parse_args()
+
+
 m=magic.open(magic.MAGIC_MIME_TYPE)
 m.load()
+
+
+def hash_file(filename, hashtype='sha1'):
+    BUF_SIZE=1024*1024 # to read files (and compute incremental hash) in 1MB blocks, not having to read in 2TB file at once...
+    if hashtype == 'sha1':
+        sha1 = hashlib.sha1()
+        with open(filename, 'rb') as f:
+            while True:
+                data = f.read(BUF_SIZE)
+                if not data:
+                    break
+                sha1.update(data)
+        hexhash = sha1.hexdigest()
+
+    return hexhash
 
 
 def getMimeType(filename):
@@ -68,9 +88,25 @@ except Exception as e:
 	print repr(e)
 	sys.exit(3)
 
-mimetype='image/gif'
 
-if mimetype in scannersByMimetype:
-    for plugin in scannersByMimetype[mimetype]:
-        regScan[plugin].scan('foobar')
+debugcount = 0
+for (dirpath, dirnames, filenames) in os.walk(args.sourcedir, topdown=True, onerror=None, followlinks=False):
+    if filenames:
+        print "Working on directory %s" %(dirpath)
+        for filename in filenames:
+            fullfilename = '%s/%s' %(dirpath, filename)
+            try:
+                mimetype = getMimeType(fullfilename)
+            except Exception as e:
+                print "Could not detect MIME type for %s" %(fullfilename)
+                mimetype = None
+                continue
+
+            if mimetype in scannersByMimetype:
+                debugcount += 1
+                for plugin in scannersByMimetype[mimetype]:
+                    regScan[plugin].scan(fullfilename)
+            if debugcount > 20:
+                print "*** DEBUG: breaking after 20 files ***"
+                break
 
