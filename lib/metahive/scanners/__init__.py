@@ -1,3 +1,6 @@
+#!/usr/bin/python
+# this is 99% taken from https://github.com/samwyse/sspp
+# Super Simple Python Plugins is a minimal framework for implementing plugins in Python programs. There's no setup or anything, just create a directory and put the __init__.py file in it (turning the directory into a module). Any Python source files placed in that directory will be automatically loaded when the module is loaded. The names of the plugins will be put in the __all__ list variable. Beyond that, you can do anything you want with the plugins.
 from glob import glob
 from keyword import iskeyword
 from os.path import dirname, join, split, splitext
