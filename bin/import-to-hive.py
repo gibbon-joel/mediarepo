@@ -14,6 +14,8 @@ import metahivesettings.settings
 import metahive.scanners
 
 registeredScanners = []
+regScan = {}
+scannersByMimetype = {}
 for name in metahive.scanners.__all__:
     plugin = getattr(metahive.scanners, name)
     try:
@@ -22,13 +24,18 @@ for name in metahive.scanners.__all__:
         print "Plugin %s does not have a register() function" %(name)
         pass
     else:
-        register_plugin()
+        supported_mimetypes = register_plugin()
+        for mimetype in supported_mimetypes:
+            if mimetype not in scannersByMimetype:
+                scannersByMimetype[mimetype] = []
+            scannersByMimetype[mimetype].append(name)
     registeredScanners.append(plugin)
+    regScan[name] = plugin
 
 db_credentials = metahivesettings.settings.db_credentials()
 
-metahive.scanners.foo1.abc()
-print registeredScanners
+#print registeredScanners
+#print scannersByMimetype
 
 m=magic.open(magic.MAGIC_MIME_TYPE)
 m.load()
@@ -60,4 +67,10 @@ except Exception as e:
 	print "Could not acquire a DB cursor"
 	print repr(e)
 	sys.exit(3)
+
+mimetype='image/gif'
+
+if mimetype in scannersByMimetype:
+    for plugin in scannersByMimetype[mimetype]:
+        regScan[plugin].scan('foobar')
 
