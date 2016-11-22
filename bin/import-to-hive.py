@@ -122,6 +122,8 @@ for mimetype in filesByMimetype:
             time_taken = finish - begin
             files_per_second = len(filesByMimetype[mimetype]) / float(time_taken)
             print "plugin %s took %0.2f seconds to parse %i files (%0.1f files per second)" %(plugin, time_taken, len(filesByMimetype[mimetype]), files_per_second)
+            for filename, metaDict in metadata.iteritems():
+                print "%s: %s" %(filename, metaDict)
     else:
         if args.verbose:
             print "There is no plugin to handle mimetype %s." %(mimetype)
