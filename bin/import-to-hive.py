@@ -4,6 +4,7 @@ import hashlib
 import MySQLdb
 import MySQLdb.cursors
 from datetime import datetime
+import time
 import shutil
 import magic
 import argparse
@@ -39,6 +40,7 @@ db_credentials = metahivesettings.settings.db_credentials()
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-s", "--sourcedir", help="Top level directory to work on (e.g. /path/to/upload/folder", required=True)
+parser.add_argument("-v", "--verbose", help="Be verbose (more debug output)", required=False, default=False)
 args = parser.parse_args()
 
 
@@ -89,6 +91,7 @@ except Exception as e:
 	sys.exit(3)
 
 
+filesByMimetype = {}
 debugcount = 0
 for (dirpath, dirnames, filenames) in os.walk(args.sourcedir, topdown=True, onerror=None, followlinks=False):
     if filenames:
@@ -101,12 +104,27 @@ for (dirpath, dirnames, filenames) in os.walk(args.sourcedir, topdown=True, oner
                 print "Could not detect MIME type for %s" %(fullfilename)
                 mimetype = None
                 continue
+            if mimetype not in filesByMimetype:
+                filesByMimetype[mimetype] = []
+            filesByMimetype[mimetype].append(fullfilename)
 
-            if mimetype in scannersByMimetype:
-                debugcount += 1
-                for plugin in scannersByMimetype[mimetype]:
-                    regScan[plugin].scan(fullfilename)
+            debugcount += 1
             if debugcount > 20:
                 print "*** DEBUG: breaking after 20 files ***"
                 break
+
+for mimetype in filesByMimetype:
+    if mimetype in scannersByMimetype:
+        for plugin in scannersByMimetype[mimetype]:
+            begin = time.time()
+            metadata = regScan[plugin].scanBulk(filesByMimetype[mimetype])
+            finish = time.time()
+            time_taken = finish - begin
+            files_per_second = len(filesByMimetype[mimetype]) / float(time_taken)
+            print "plugin %s took %0.2f seconds to parse %i files (%0.1f files per second)" %(plugin, time_taken, len(filesByMimetype[mimetype]), files_per_second)
+    else:
+        if args.verbose:
+            print "There is no plugin to handle mimetype %s." %(mimetype)
+            print filesByMimetype[mimetype]
+            print "--"
 
