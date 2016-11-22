@@ -40,7 +40,9 @@ db_credentials = metahivesettings.settings.db_credentials()
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-s", "--sourcedir", help="Top level directory to work on (e.g. /path/to/upload/folder", required=True)
-parser.add_argument("-v", "--verbose", help="Be verbose (more debug output)", required=False, default=False)
+parser.add_argument("-v", "--verbose", help="Be verbose (more debug output)", required=False, default=False, action='store_true')
+parser.add_argument("-c", "--copy-to-repo", help="copy scanned supported files into the media repository", required=False, default=False, action='store_true')
+parser.add_argument("-d", "--delete-original", help="delete original/duplicate files if we have a copy in the media repository", required=False, default=False, action='store_true')
 args = parser.parse_args()
 
 
@@ -71,16 +73,34 @@ def getMimeType(filename):
         print repr(e)
     return result
 
-def hash_filenames_array(filenames_array):
+def gatherBasicInfo(filenames_array):
+    """
+    This will hash the file and collect "basic" OS-level information like ctime, mtime, size etc.
+    It expects an array of filenames (with full path information) and will return a dict with the
+    full filename as key and the basic info as a dict.
+
+    input: [ '/path/to/file/1.jpg', '/path/to/file/2.jpg' ]
+    output: { '/path/to/file/1.jpg' : { 'hash.sha1': '...', 'ctime': '...' }, ... }
+    """
     begin = time.time()
-    fileHashes = {}
+    fileInfo = {}
     for filename in filenames_array:
-        fileHashes[filename] = hash_file(filename)
+        fileInfo[filename] = { 'hash.sha1': hash_file(filename) }
+        try:
+            info = os.stat(filename)
+        except:
+            print "Could not stat file '%s'" %(filename)
+        else:
+            file_mtime = datetime.fromtimestamp(info.st_mtime)
+            file_ctime = datetime.fromtimestamp(info.st_ctime)
+            fileInfo[filename]['ctime'] = file_ctime
+            fileInfo[filename]['mtime'] = file_mtime
+
     finish = time.time()
     time_taken = finish - begin
     files_per_second = len(filenames_array) / float(time_taken)
-    print "It took %0.2f seconds to hash %i files (%0.1f files per second)" %(time_taken, len(filenames_array), files_per_second)
-    return fileHashes
+    print "It took %0.2f seconds to gather basic info for %i files (%0.1f files per second)" %(time_taken, len(filenames_array), files_per_second)
+    return fileInfo
 
 
 if not db_credentials:
@@ -128,7 +148,7 @@ for mimetype in filesByMimetype:
     if mimetype in scannersByMimetype:
 
         # supported file (we have at least one scanner that can give us metadata), so hash it...
-        fileHashes = hash_filenames_array(filesByMimetype[mimetype])
+        filesBasicInfo = gatherBasicInfo(filesByMimetype[mimetype])
 
         # check whether we have data already in SQL; figure out whether we need to import & delete... etc.
         # TODO
@@ -145,7 +165,7 @@ for mimetype in filesByMimetype:
                 files_per_second = len(filesByMimetype[mimetype]) / float(time_taken)
             print "plugin %s took %0.2f seconds to parse %i files (%0.1f files per second)" %(plugin, time_taken, len(filesByMimetype[mimetype]), files_per_second)
             for filename, metaDict in metadata.iteritems():
-                print "%s: %s: %s" %(filename, fileHashes[filename], metaDict)
+                print "%s: %s: %s" %(filename, filesBasicInfo[filename], metaDict)
     else:
         if args.verbose:
             print "There is no plugin to handle mimetype %s." %(mimetype)
