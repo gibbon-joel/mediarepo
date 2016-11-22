@@ -64,12 +64,23 @@ def hash_file(filename, hashtype='sha1'):
 
 
 def getMimeType(filename):
-	try:
-		result = m.file(filename)
-	except Exception as e:
-		result = False
-		print repr(e)
-	return result
+    try:
+        result = m.file(filename)
+    except Exception as e:
+        result = False
+        print repr(e)
+    return result
+
+def hash_filenames_array(filenames_array):
+    begin = time.time()
+    fileHashes = {}
+    for filename in filenames_array:
+        fileHashes[filename] = hash_file(filename)
+    finish = time.time()
+    time_taken = finish - begin
+    files_per_second = len(filenames_array) / float(time_taken)
+    print "It took %0.2f seconds to hash %i files (%0.1f files per second)" %(time_taken, len(filenames_array), files_per_second)
+    return fileHashes
 
 
 if not db_credentials:
@@ -115,15 +126,26 @@ for (dirpath, dirnames, filenames) in os.walk(args.sourcedir, topdown=True, oner
 
 for mimetype in filesByMimetype:
     if mimetype in scannersByMimetype:
+
+        # supported file (we have at least one scanner that can give us metadata), so hash it...
+        fileHashes = hash_filenames_array(filesByMimetype[mimetype])
+
+        # check whether we have data already in SQL; figure out whether we need to import & delete... etc.
+        # TODO
+
+        # iterate over registered metadata scanners for the current mimetype
         for plugin in scannersByMimetype[mimetype]:
             begin = time.time()
             metadata = regScan[plugin].scanBulk(filesByMimetype[mimetype])
             finish = time.time()
             time_taken = finish - begin
-            files_per_second = len(filesByMimetype[mimetype]) / float(time_taken)
+            if time_taken <= 0:
+                files_per_second = -1  # avoid division by zero
+            else:
+                files_per_second = len(filesByMimetype[mimetype]) / float(time_taken)
             print "plugin %s took %0.2f seconds to parse %i files (%0.1f files per second)" %(plugin, time_taken, len(filesByMimetype[mimetype]), files_per_second)
             for filename, metaDict in metadata.iteritems():
-                print "%s: %s" %(filename, metaDict)
+                print "%s: %s: %s" %(filename, fileHashes[filename], metaDict)
     else:
         if args.verbose:
             print "There is no plugin to handle mimetype %s." %(mimetype)
