@@ -85,7 +85,6 @@ def gatherBasicInfo(filenames_array):
     begin = time.time()
     fileInfo = {}
     for filename in filenames_array:
-        fileInfo[filename] = { 'hash.sha1': hash_file(filename) }
         try:
             info = os.stat(filename)
         except:
@@ -93,8 +92,12 @@ def gatherBasicInfo(filenames_array):
         else:
             file_mtime = datetime.fromtimestamp(info.st_mtime)
             file_ctime = datetime.fromtimestamp(info.st_ctime)
-            fileInfo[filename]['ctime'] = file_ctime
-            fileInfo[filename]['mtime'] = file_mtime
+            fileInfo[filename] = {
+                    'hash.sha1': hash_file(filename),
+                    'ctime': file_ctime,
+                    'mtime': file_mtime,
+                    'size': info.st_size,
+                    }
 
     finish = time.time()
     time_taken = finish - begin
@@ -102,6 +105,46 @@ def gatherBasicInfo(filenames_array):
     print "It took %0.2f seconds to gather basic info for %i files (%0.1f files per second)" %(time_taken, len(filenames_array), files_per_second)
     return fileInfo
 
+
+def getRepoStateForFiles(filenames_dict):
+    """
+    Expects a dict of dicts (essentially, the output of "gatherBasicInfo"). Constructs SQL to check
+    which of the files (if any) we have already in the database.
+    """
+    hash_lookup = {}
+    #hash_lookup['463699b9bc849c94e0f45ff2f21b171d2d128bec'] = {'size': 0, 'name': 'undefined name'}
+    for filename, filedata in filenames_dict.iteritems():
+        hash_lookup[filedata['hash.sha1']] = { 'size': filedata['size'], 'name': filename }
+
+    # I want to create SQL of the form 'SELECT id, filesize FROM files WHERE hash IN ( hash1, hash2, hash3, ... )'
+    # then compare hash & filesizes
+    placeholders = ', '.join(['%s'] * len(hash_lookup))
+    sql = 'SELECT id, sha1, file_size FROM files WHERE sha1 IN (%s)' %(placeholders)
+    #print sql
+    #print hash_lookup.keys()
+    c.execute( sql, hash_lookup.keys() )
+    rows = c.fetchall()
+    # ({'sha1': '463699b9bc849c94e0f45ff2f21b171d2d128bec', 'id': 284L, 'file_size': None},)
+    alreadyInRepo = {}
+    for row in rows:
+        if row['sha1'] in hash_lookup  and  'name' in hash_lookup[row['sha1']]:
+            #print hash_lookup[row['sha1']]
+            filename = hash_lookup[row['sha1']]['name']
+        else:
+            filename = 'unknown filename'
+        alreadyInRepo[row['sha1']] = { 'size': row['file_size'], 'name': hash_lookup[row['sha1']]['name'] }
+    notInRepo = {}
+    for hashvalue, value in hash_lookup.iteritems():
+        if hashvalue not in alreadyInRepo:
+            notInRepo[hashvalue] = value
+
+    #diffkeys = set(hash_lookup) - set(alreadyInRepo)
+    #print hash_lookup
+    #print alreadyInRepo
+    #print diffkeys
+    #print notInRepo
+    #print rows
+    return [ notInRepo, alreadyInRepo ]
 
 if not db_credentials:
 	print "No database credentials, cannot run."
@@ -151,7 +194,12 @@ for mimetype in filesByMimetype:
         filesBasicInfo = gatherBasicInfo(filesByMimetype[mimetype])
 
         # check whether we have data already in SQL; figure out whether we need to import & delete... etc.
-        # TODO
+        notInRepo, alreadyInRepo = getRepoStateForFiles ( filesBasicInfo )
+
+        #print "not found in Repo: %s" %("\n".join(notInRepo))
+        #print "already in Repo: %s" %("\n".join(alreadyInRepo))
+
+
 
         # iterate over registered metadata scanners for the current mimetype
         for plugin in scannersByMimetype[mimetype]:
