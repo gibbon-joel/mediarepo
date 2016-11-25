@@ -41,8 +41,8 @@ db_credentials = metahivesettings.settings.db_credentials()
 parser = argparse.ArgumentParser()
 parser.add_argument("-s", "--sourcedir", help="Top level directory to work on (e.g. /path/to/upload/folder", required=True)
 parser.add_argument("-v", "--verbose", help="Be verbose (more debug output)", required=False, default=False, action='store_true')
-parser.add_argument("-c", "--copy-to-repo", help="copy scanned supported files into the media repository", required=False, default=False, action='store_true')
-parser.add_argument("-d", "--delete-original", help="delete original/duplicate files if we have a copy in the media repository", required=False, default=False, action='store_true')
+parser.add_argument("-c", "--copy-to-repo", help="copy scanned supported files into the media repository", required=False, default=False, action='store_true', dest='copy_to_repo')
+parser.add_argument("-d", "--delete-original", help="delete original/duplicate files if we have a copy in the media repository", required=False, default=False, action='store_true', dest='delete_original')
 args = parser.parse_args()
 
 
@@ -75,7 +75,7 @@ def getMimeType(filename):
 
 def gatherBasicInfo(filenames_array):
     """
-    This will hash the file and collect "basic" OS-level information like ctime, mtime, size etc.
+    This will collect "basic" OS-level information like ctime, mtime, size etc.
     It expects an array of filenames (with full path information) and will return a dict with the
     full filename as key and the basic info as a dict.
 
@@ -93,7 +93,6 @@ def gatherBasicInfo(filenames_array):
             file_mtime = datetime.fromtimestamp(info.st_mtime)
             file_ctime = datetime.fromtimestamp(info.st_ctime)
             fileInfo[filename] = {
-                    'hash.sha1': hash_file(filename),
                     'ctime': file_ctime,
                     'mtime': file_mtime,
                     'size': info.st_size,
@@ -111,40 +110,106 @@ def getRepoStateForFiles(filenames_dict):
     Expects a dict of dicts (essentially, the output of "gatherBasicInfo"). Constructs SQL to check
     which of the files (if any) we have already in the database.
     """
+
+
+
+    """
+    As we do not want to hash everything again if it's known but not stored in the repo, we will
+    rely on os.stat + filename as a rough initial check, only hashing if we do not find an exact match...
+    """
+    for filename, filedata in filenames_dict.iteritems():
+        sql = "SELECT id, sha1, file_size, original_ctime as ctime, original_mtime as mtime, is_in_repo FROM files WHERE file_size=%s and original_ctime=%s and original_mtime=%s and original_filename=%s"
+
+        numHits = c.execute ( sql, [ filedata['size'], filedata['ctime'], filedata['mtime'], filename ] )
+        if numHits > 0:
+            if numHits > 1:
+                #print "AAAARGH - file %s found more than once in the database - this should never happen" %(filename)
+                print "<5> More than one hit for %s found in DB, cannot use hash from db, hashing live..."
+                filenames_dict[filename]['hash.sha1'] = hash_file(filename)
+            else:
+                row = c.fetchone()
+                print "<6> Exactly one match for stat-params for %s found in DB, using hash %s from DB" %(filename, row['sha1'])
+                filenames_dict[filename]['hash.sha1'] = row['sha1']
+        else:
+            print "<6> File %s not known yet - hash it" %(filename)
+            filenames_dict[filename]['hash.sha1'] = hash_file(filename)
+
+
+
     hash_lookup = {}
     #hash_lookup['463699b9bc849c94e0f45ff2f21b171d2d128bec'] = {'size': 0, 'name': 'undefined name'}
     for filename, filedata in filenames_dict.iteritems():
+        #print filedata
         hash_lookup[filedata['hash.sha1']] = { 'size': filedata['size'], 'name': filename }
 
     # I want to create SQL of the form 'SELECT id, filesize FROM files WHERE hash IN ( hash1, hash2, hash3, ... )'
     # then compare hash & filesizes
     placeholders = ', '.join(['%s'] * len(hash_lookup))
-    sql = 'SELECT id, sha1, file_size FROM files WHERE sha1 IN (%s)' %(placeholders)
+    sql = 'SELECT * FROM files WHERE sha1 IN (%s)' %(placeholders)
     #print sql
     #print hash_lookup.keys()
     c.execute( sql, hash_lookup.keys() )
     rows = c.fetchall()
     # ({'sha1': '463699b9bc849c94e0f45ff2f21b171d2d128bec', 'id': 284L, 'file_size': None},)
-    alreadyInRepo = {}
+    known = {}
     for row in rows:
         if row['sha1'] in hash_lookup  and  'name' in hash_lookup[row['sha1']]:
             #print hash_lookup[row['sha1']]
             filename = hash_lookup[row['sha1']]['name']
         else:
             filename = 'unknown filename'
-        alreadyInRepo[row['sha1']] = { 'size': row['file_size'], 'name': hash_lookup[row['sha1']]['name'] }
-    notInRepo = {}
+        known[row['sha1']] = {
+                'size': row['file_size'],
+                'name': filename,
+                'ctime': filenames_dict[filename]['ctime'],
+                'mtime': filenames_dict[filename]['mtime'],
+                'id': row['id'],
+                'is_in_repo': row['is_in_repo']
+                }
+    notKnown = {}
     for hashvalue, value in hash_lookup.iteritems():
-        if hashvalue not in alreadyInRepo:
-            notInRepo[hashvalue] = value
+        if hashvalue not in known:
+            notKnown[hashvalue] = {
+                    'size': filenames_dict[value['name']]['size'],
+                    'name': value['name'],
+                    'ctime': filenames_dict[value['name']]['ctime'],
+                    'mtime': filenames_dict[value['name']]['mtime'],
+                    'id': None,
+                    'is_in_repo': False
+                    }
 
-    #diffkeys = set(hash_lookup) - set(alreadyInRepo)
+    #diffkeys = set(hash_lookup) - set(known)
     #print hash_lookup
-    #print alreadyInRepo
+    #print known
     #print diffkeys
-    #print notInRepo
+    #print notKnown
     #print rows
-    return [ notInRepo, alreadyInRepo ]
+    return [ notKnown, known ]
+
+
+def addFileIntoDB ( filehash, mimetype, extraInfo ):
+    """
+    takes a hash and the "extraInfo" dict with ctime, mtime, size, name and is_in_repo values, then tries to add it into the db.
+    """
+    # f7bef5ce2781d8667f2ed85eac4627d532d32222, {'is_in_repo': False, 'ctime': datetime.datetime(2015, 10, 14, 19, 1, 52, 418553), 'mtime': datetime.datetime(2015, 4, 26, 14, 24, 26), 'size': 2628630, 'id': None, 'name': '/treasure/media-throwaway/temp/upload/foobar/IMG_6344.JPG'}
+    sql = """INSERT INTO files SET
+    is_in_repo = %s,
+    original_filename = %s,
+    type = %s,
+    sha1 = %s,
+    file_size = %s,
+    original_mtime = %s,
+    original_ctime = %s
+    """
+    try:
+        affected = c.execute(sql, [ extraInfo['is_in_repo'], extraInfo['name'], mimetype, filehash, extraInfo['size'], extraInfo['mtime'], extraInfo['ctime'] ] )
+    except Exception as e:
+        print "Cannot insert file %s into DB" %(filehash)
+        print repr(e)
+        return False
+    print "Successfully INSERTed. Affected: %i" %(affected)
+    return True
+
 
 if not db_credentials:
 	print "No database credentials, cannot run."
@@ -194,10 +259,27 @@ for mimetype in filesByMimetype:
         filesBasicInfo = gatherBasicInfo(filesByMimetype[mimetype])
 
         # check whether we have data already in SQL; figure out whether we need to import & delete... etc.
-        notInRepo, alreadyInRepo = getRepoStateForFiles ( filesBasicInfo )
+        notKnown, known = getRepoStateForFiles ( filesBasicInfo )
 
-        #print "not found in Repo: %s" %("\n".join(notInRepo))
-        #print "already in Repo: %s" %("\n".join(alreadyInRepo))
+        for filehash, extraInfo in known.iteritems():
+            # extraInfo is hash, ctime, db_id and the "lives_in_repo" field.
+            print "known file: %s, info: %s" %(filehash, extraInfo)
+        for filehash, extraInfo in notKnown.iteritems():
+            # extraInfo is hash + ctime etc
+            print "unknown %s file: %s, info: %s" %(mimetype, filehash, extraInfo)
+            if args.copy_to_repo:
+                try:
+                    safelyImportFileIntoRepo(filehash, extraInfo)
+                except Exception as e:
+                    print "Could not import file %s(%s) into repo" %(filehash, extraInfo['filename'])
+                else:
+                    extraInfo['is_in_repo'] = True
+            addFileIntoDB(filehash, mimetype, extraInfo)
+            # hmmm. When to commit the DB? After every file, or at some other point?
+            db.commit()
+
+        #print "not found in Repo: %s" %("\n".join(notKnown))
+        #print "already in Repo: %s" %("\n".join(known))
 
 
 
