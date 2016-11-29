@@ -190,6 +190,7 @@ def getRepoStateForFiles(filenames_dict):
 def addFileIntoDB ( filehash, mimetype, extraInfo ):
     """
     takes a hash and the "extraInfo" dict with ctime, mtime, size, name and is_in_repo values, then tries to add it into the db.
+    Returns False on failure or the insert_id on success.
     """
     # f7bef5ce2781d8667f2ed85eac4627d532d32222, {'is_in_repo': False, 'ctime': datetime.datetime(2015, 10, 14, 19, 1, 52, 418553), 'mtime': datetime.datetime(2015, 4, 26, 14, 24, 26), 'size': 2628630, 'id': None, 'name': '/treasure/media-throwaway/temp/upload/foobar/IMG_6344.JPG'}
     sql = """INSERT INTO files SET
@@ -208,8 +209,153 @@ def addFileIntoDB ( filehash, mimetype, extraInfo ):
         print repr(e)
         return False
     print "Successfully INSERTed. Affected: %i" %(affected)
-    return True
+    return c.lastrowid
 
+
+def getExtension(filename):
+    extensionPos = filename.rfind('.')
+    return filename[extensionPos+1:].lower()
+
+def getMetadataForFiles(files, scannersOnly = False):
+    """
+    retrieve metadata for a dict of files
+    if scannersOnly = True, we're only interested in the actual scanners (to know which plugins to run again)
+    """
+    placeholders = ', '.join(['%s'] * len(files))
+    filesById = []
+    #print files
+    for filename, extraInfo in files.iteritems():
+        if 'id' in extraInfo:
+            filesById.append(extraInfo['id'])
+    if scannersOnly:
+        sql = 'SELECT DISTINCT file_id, scanner FROM metadata WHERE file_id IN (%s) GROUP BY file_id, scanner' %(placeholders)
+    else:
+        sql = 'SELECT * FROM metadata WHERE file_id IN (%s)' %(placeholders)
+    #print sql
+    #print hash_lookup.keys()
+    c.execute( sql, filesById )
+    rows = c.fetchall()
+    metadata = {}
+    for row in rows:
+        fileId = row['file_id']
+        print row
+
+
+def getFileIDByHash(filehash):
+    if filehash in known:
+        if 'id' in known[filehash]:
+            return known[filehash]['id']
+    numrows = c.execute('SELECT id FROM files WHERE sha1=%s', [filehash])
+    if numrows == 1:
+        return c.fetchone()[0]
+    return False
+
+def getMetadataFromDB(file_id, scanner = 'all' ):
+    #print "%s has id %s" %(filehash, file_id)
+    if not file_id:
+        return False
+    #+----------+--------------+------+-----+---------+----------------+
+    #| Field    | Type         | Null | Key | Default | Extra          |
+    #+----------+--------------+------+-----+---------+----------------+
+    #| id       | bigint(20)   | NO   | PRI | NULL    | auto_increment |
+    #| file_id  | bigint(20)   | NO   |     | NULL    |                |
+    #| scanner  | varchar(255) | YES  |     | NULL    |                |
+    #| tagname  | varchar(255) | YES  |     | NULL    |                |
+    #| tagvalue | varchar(255) | YES  |     | NULL    |                |
+    #+----------+--------------+------+-----+---------+----------------+
+
+    if scanner is 'all':
+        numrows = c.execute("SELECT * FROM metadata WHERE file_id=%s", [file_id])
+    else:
+        numrows = c.execute("SELECT * FROM metadata WHERE file_id=%s AND scanner=%s", [file_id, scanner])
+    #print "getMeta fetched %i rows" %(numrows)
+    result = c.fetchall()
+    metadata = {}
+    for row in result:
+        if row['scanner'] not in metadata:
+            metadata[row['scanner']] = {}
+        metadata[row['scanner']][row['tagname']] = row['tagvalue']
+    return metadata
+
+
+def compareMetadata(old, new):
+    deleted = {}
+    added = {}
+    #print repr(old)
+    #print repr(new)
+    for scanner in old:
+        if scanner not in new:
+            deleted[scanner] = old[scanner]
+        else:
+            for tagname in old[scanner]:
+                if tagname not in new[scanner]:
+                    if scanner not in deleted:
+                        deleted[scanner] = {}
+                    deleted[scanner][tagname] = old[scanner][tagname]
+                else:
+                    if str(old[scanner][tagname]) != str(new[scanner][tagname]):
+                        if scanner not in deleted:
+                            deleted[scanner] = {}
+                        if scanner not in added:
+                            added[scanner] = {}
+                        print "value of tag %s differs: %s vs %s" %(tagname, repr(old[scanner][tagname]), repr(new[scanner][tagname]))
+                        deleted[scanner][tagname] = old[scanner][tagname]
+                        added[scanner][tagname] = new[scanner][tagname]
+    for scanner in new:
+        if scanner not in old:
+            added[scanner] = new[scanner]
+        else:
+            for tagname in new[scanner]:
+                if tagname not in old[scanner]:
+                    if scanner not in added:
+                        added[scanner] = {}
+                    added[scanner][tagname] = new[scanner][tagname]
+    return [ deleted, added ]
+
+def makeString(indict):
+    for k, v in indict.iteritems():
+        indict[k] = str(v)
+    return indict
+
+def putMetadataIntoDB(scanner, filehash, metaDict):
+    print "Put metadata from scanner %s for filehash %s into DB" %(scanner, filehash)
+    file_id = getFileIDByHash(filehash)
+    oldData = getMetadataFromDB(file_id, scanner=scanner)
+    #print oldData
+    if not oldData: oldData = { scanner: {} }
+    newData = { scanner: makeString(metaDict) }
+    deleted, added = compareMetadata(oldData, newData)
+    #print "diff:"
+    #print deleted
+    #print "--"
+    #print added
+    #print "++"
+    #print "***"
+
+
+    deletedRows = c.execute('DELETE FROM metadata WHERE file_id=%s and scanner=%s', [file_id, scanner])
+
+    placeholders = ', '.join(["(%s, '%s', %%s, %%s)" %(file_id, scanner)] * len(newData[scanner]))
+    sql = 'INSERT INTO metadata (file_id, scanner, tagname, tagvalue) VALUES %s' %(placeholders)
+    #print sql
+    #print hash_lookup.keys()
+    sqlarray = []
+    for tagname, tagvalue in newData[scanner].iteritems():
+        sqlarray.append(tagname)
+        sqlarray.append(tagvalue)
+    try:
+        numrows = c.execute( sql, sqlarray )
+    except Exception as e:
+        print "error on INSERT metadata"
+        print repr(e)
+    else:
+        print "<7> %i rows INSERTed for scanner %s on file %s" %(numrows, scanner, file_id)
+        db.commit()
+
+
+def safelyImportFileIntoRepo ( filehash, extraInfo ):
+    print "importIntoRepo not implemented yet for %s" %(filehash)
+    return False
 
 if not db_credentials:
 	print "No database credentials, cannot run."
@@ -261,27 +407,46 @@ for mimetype in filesByMimetype:
         # check whether we have data already in SQL; figure out whether we need to import & delete... etc.
         notKnown, known = getRepoStateForFiles ( filesBasicInfo )
 
-        for filehash, extraInfo in known.iteritems():
-            # extraInfo is hash, ctime, db_id and the "lives_in_repo" field.
-            print "known file: %s, info: %s" %(filehash, extraInfo)
         for filehash, extraInfo in notKnown.iteritems():
             # extraInfo is hash + ctime etc
             print "unknown %s file: %s, info: %s" %(mimetype, filehash, extraInfo)
-            if args.copy_to_repo:
+            fileId = addFileIntoDB(filehash, mimetype, extraInfo)
+            if fileId:
+            # hmmm. When to commit the DB? After every file, or at some other point?
+                try:
+                    db.commit()
+                except Exception as e:
+                    print "Could not commit DB changes."
+                    print repr(e)
+                else:
+                    extraInfo['id'] = fileId
+                    known[filehash] = extraInfo
+                    hashByFilename[extraInfo['name']] = filehash
+
+        for filehash, extraInfo in known.iteritems():
+            # extraInfo is hash, ctime, db_id and the "lives_in_repo" field.
+            print "known file: %s, info: %s" %(filehash, extraInfo)
+            if args.copy_to_repo  and  not extraInfo['is_in_repo']:
                 try:
                     safelyImportFileIntoRepo(filehash, extraInfo)
                 except Exception as e:
                     print "Could not import file %s(%s) into repo" %(filehash, extraInfo['filename'])
-                else:
-                    extraInfo['is_in_repo'] = True
-            addFileIntoDB(filehash, mimetype, extraInfo)
-            # hmmm. When to commit the DB? After every file, or at some other point?
-            db.commit()
 
         #print "not found in Repo: %s" %("\n".join(notKnown))
         #print "already in Repo: %s" %("\n".join(known))
 
+        knownMetaData = getMetadataForFiles(files = known, scannersOnly = True)
 
+        hashByFilename = {}
+        for k, v in known.iteritems():
+            #print "hbF: %s = %s" %(k, v)
+            if v['name'] not in hashByFilename:
+                hashByFilename[v['name']] = k
+            else:
+                print "Duplicate filename %s?! This should not happen" %(v['name'])
+        #print "hbF:"
+        #print hashByFilename
+        #print "**"
 
         # iterate over registered metadata scanners for the current mimetype
         for plugin in scannersByMimetype[mimetype]:
@@ -295,7 +460,21 @@ for mimetype in filesByMimetype:
                 files_per_second = len(filesByMimetype[mimetype]) / float(time_taken)
             print "plugin %s took %0.2f seconds to parse %i files (%0.1f files per second)" %(plugin, time_taken, len(filesByMimetype[mimetype]), files_per_second)
             for filename, metaDict in metadata.iteritems():
+                if filename in hashByFilename:
+                    filehash = hashByFilename[filename]
+                else:
+                    print "file %s - no hash found, skip" %(filename)
+                    continue
+
+                try:
+                    putMetadataIntoDB(plugin, filehash, metaDict)
+                except Exception as e:
+                    print "Could not put metadata into DB"
+                    print repr(e)
+                else:
+                    print "<7> successfully updated metadata for %s" %(filename)
                 print "%s: %s: %s" %(filename, filesBasicInfo[filename], metaDict)
+
     else:
         if args.verbose:
             print "There is no plugin to handle mimetype %s." %(mimetype)

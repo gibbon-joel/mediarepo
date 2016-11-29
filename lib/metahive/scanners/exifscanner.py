@@ -16,6 +16,8 @@ def scanBulk(filenames_array):
         metadata = et.get_metadata_batch(filenames_array)
         for m in metadata:
             filename = '%s/%s'%(m['File:Directory'], m['File:FileName'])
+            if 'File:FileAccessDate' in m:
+                del m['File:FileAccessDate']
             output[filename] = m
 
     # expected output format: { 'filename' : {tagName, tagValue}, ... }
