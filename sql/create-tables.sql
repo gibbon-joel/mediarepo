@@ -18,8 +18,15 @@ CREATE TABLE `metadata` (
       `scanner` varchar(255) DEFAULT NULL,
       `tagname` varchar(255) DEFAULT NULL,
       `tagvalue` varchar(255) DEFAULT NULL,
+      `tagvalue_float` double DEFAULT NULL,
+      `tagvalue_date` datetime DEFAULT NULL,
       PRIMARY KEY (`id`),
-      KEY `file_id` (`file_id`)
+      KEY `file_id` (`file_id`),
+      KEY `scanner` (`scanner`),
+      KEY `tagname` (`tagname`),
+      KEY `tagvalue` (`tagvalue`),
+      KEY `tagvalue_2` (`tagvalue`,`tagname`),
+      KEY `tagvalue_float` (`tagvalue_float`),
+      KEY `tagvalue_date` (`tagvalue_date`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
-
-
+    

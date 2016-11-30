@@ -8,6 +8,7 @@ import time
 import shutil
 import magic
 import argparse
+import re
 
 sys.path.append('%s/../lib' %(os.path.dirname(__file__)))
 import metahivesettings.settings
@@ -339,14 +340,52 @@ def putMetadataIntoDB(scanner, filehash, metaDict):
 
     deletedRows = c.execute('DELETE FROM metadata WHERE file_id=%s and scanner=%s', [file_id, scanner])
 
-    placeholders = ', '.join(["(%s, '%s', %%s, %%s)" %(file_id, scanner)] * len(newData[scanner]))
-    sql = 'INSERT INTO metadata (file_id, scanner, tagname, tagvalue) VALUES %s' %(placeholders)
+    placeholders = ', '.join(["(%s, '%s', %%s, %%s, %%s, %%s)" %(file_id, scanner)] * len(newData[scanner]))
+    sql = 'INSERT INTO metadata (file_id, scanner, tagname, tagvalue, tagvalue_float, tagvalue_date) VALUES %s' %(placeholders)
     #print sql
     #print hash_lookup.keys()
     sqlarray = []
     for tagname, tagvalue in newData[scanner].iteritems():
         sqlarray.append(tagname)
         sqlarray.append(tagvalue)
+
+        try:
+            valFloat = float(tagvalue)
+        except ValueError:
+            valFloat = None
+        sqlarray.append(valFloat)
+
+        valDate = None
+        if 'date' in tagname.lower() or 'time' in tagname.lower():
+            try:
+                # 2015:08:22 19:09:58.241
+                # 2015:09:14
+                # 2015:08:22 19:09:58.241
+                # 2015:08:22 19:09:58+02:00
+                # 2015:08:22 19:09:58
+                # 2015:08:22 19:09:58.241
+                # 17:09:56.52
+                # 2015:08:22 17:09:56.52Z
+                # 2015:08:22
+                m = re.search('^((19|20|21)[0-9][0-9])[-:._]((0[1-9]|1[0-2]))[-:._]([0-3][0-9])(.*)', tagvalue )
+                if m:
+                    valDate = "%s-%s-%s %s" %(m.group(1), m.group(3), m.group(5), m.group(6))
+                    print "Matched %s in %s => %s" %(tagvalue, tagname, valDate)
+                else:
+                    m = re.search('^([01][0-9]|2[0-3])[-:._]([0-5][0-9])[-:._]([0-5][0-9])(\.[0-9]+)?', tagvalue )
+                    if m:
+                        valDate = "1970-01-01 %s:%s:%s" %(m.group(1), m.group(2), m.group(3))
+                        if m.group(4):
+                            valDate = "%s%s" %(valDate, m.group(4))
+                        print "Matched %s in %s => %s" %(tagvalue, tagname, valDate)
+                    #else:
+                        #print "Could not match %s in %s" %(tagvalue, tagname)
+
+
+            except ValueError:
+                valDate = None
+        sqlarray.append(valDate)
+
     try:
         numrows = c.execute( sql, sqlarray )
     except Exception as e:
