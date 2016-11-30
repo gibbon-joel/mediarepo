@@ -238,8 +238,12 @@ def getMetadataForFiles(files, scannersOnly = False):
     metadata = {}
     for row in rows:
         fileId = row['file_id']
-        print row
-
+        if fileId not in metadata:
+            metadata[fileId] = {}
+        metadata[fileId][row['scanner']] = {}
+        for k, v in row.iteritems():
+            metadata[fileId][row['scanner']][k] = v
+    return metadata
 
 def getFileIDByHash(filehash):
     if filehash in known:
@@ -394,8 +398,8 @@ for (dirpath, dirnames, filenames) in os.walk(args.sourcedir, topdown=True, oner
             filesByMimetype[mimetype].append(fullfilename)
 
             debugcount += 1
-            if debugcount > 20:
-                print "*** DEBUG: breaking after 20 files ***"
+            if debugcount > 32:
+                print "*** DEBUG: breaking after %i files ***" %(debugcount)
                 break
 
 for mimetype in filesByMimetype:
@@ -407,6 +411,7 @@ for mimetype in filesByMimetype:
         # check whether we have data already in SQL; figure out whether we need to import & delete... etc.
         notKnown, known = getRepoStateForFiles ( filesBasicInfo )
 
+        hashByFilename = {}
         for filehash, extraInfo in notKnown.iteritems():
             # extraInfo is hash + ctime etc
             print "unknown %s file: %s, info: %s" %(mimetype, filehash, extraInfo)
@@ -436,12 +441,18 @@ for mimetype in filesByMimetype:
         #print "already in Repo: %s" %("\n".join(known))
 
         knownMetaData = getMetadataForFiles(files = known, scannersOnly = True)
+        print "=================="
+        print "knownMetaData:"
+        print knownMetaData
+        print "=================="
 
-        hashByFilename = {}
+        hashById = {}
         for k, v in known.iteritems():
             #print "hbF: %s = %s" %(k, v)
             if v['name'] not in hashByFilename:
                 hashByFilename[v['name']] = k
+            if v['id'] not in hashById:
+                hashById[v['id']] = k
             else:
                 print "Duplicate filename %s?! This should not happen" %(v['name'])
         #print "hbF:"
@@ -451,7 +462,24 @@ for mimetype in filesByMimetype:
         # iterate over registered metadata scanners for the current mimetype
         for plugin in scannersByMimetype[mimetype]:
             begin = time.time()
-            metadata = regScan[plugin].scanBulk(filesByMimetype[mimetype])
+            list_of_files_to_scan = []
+            for filename in filesByMimetype[mimetype]:
+                if filename in hashByFilename:
+                    filehash = hashByFilename[filename]
+                    if filehash in known:
+                        if 'id' in known[filehash]:
+                            fileId = known[filehash]['id']
+                            if fileId in knownMetaData:
+                                fmd = knownMetaData[fileId]
+                                if plugin in fmd:
+                                    print "Not scanning file %s with scanner %s, already have data in DB" %(filename, plugin)
+                                    continue
+                list_of_files_to_scan.append(filename)
+            print "list of files to scan with %s: %s" %(plugin, list_of_files_to_scan)
+            if list_of_files_to_scan:
+                metadata = regScan[plugin].scanBulk(list_of_files_to_scan)
+            else:
+                metadata = False
             finish = time.time()
             time_taken = finish - begin
             if time_taken <= 0:
@@ -459,21 +487,22 @@ for mimetype in filesByMimetype:
             else:
                 files_per_second = len(filesByMimetype[mimetype]) / float(time_taken)
             print "plugin %s took %0.2f seconds to parse %i files (%0.1f files per second)" %(plugin, time_taken, len(filesByMimetype[mimetype]), files_per_second)
-            for filename, metaDict in metadata.iteritems():
-                if filename in hashByFilename:
-                    filehash = hashByFilename[filename]
-                else:
-                    print "file %s - no hash found, skip" %(filename)
-                    continue
+            if metadata:
+                for filename, metaDict in metadata.iteritems():
+                    if filename in hashByFilename:
+                        filehash = hashByFilename[filename]
+                    else:
+                        print "file %s - no hash found, skip" %(filename)
+                        continue
 
-                try:
-                    putMetadataIntoDB(plugin, filehash, metaDict)
-                except Exception as e:
-                    print "Could not put metadata into DB"
-                    print repr(e)
-                else:
-                    print "<7> successfully updated metadata for %s" %(filename)
-                print "%s: %s: %s" %(filename, filesBasicInfo[filename], metaDict)
+                    try:
+                        putMetadataIntoDB(plugin, filehash, metaDict)
+                    except Exception as e:
+                        print "Could not put metadata into DB"
+                        print repr(e)
+                    else:
+                        print "<7> successfully updated metadata for %s" %(filename)
+                    print "%s: %s: %s" %(filename, filesBasicInfo[filename], metaDict)
 
     else:
         if args.verbose:
