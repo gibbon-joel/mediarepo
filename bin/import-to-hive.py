@@ -34,6 +34,7 @@ for name in metahive.scanners.__all__:
     regScan[name] = plugin
 
 db_credentials = metahivesettings.settings.db_credentials()
+repoDir = metahivesettings.settings.repo_dir()
 
 #print registeredScanners
 #print scannersByMimetype
@@ -46,6 +47,10 @@ parser.add_argument("-c", "--copy-to-repo", help="copy scanned supported files i
 parser.add_argument("-d", "--delete-original", help="delete original/duplicate files if we have a copy in the media repository", required=False, default=False, action='store_true', dest='delete_original')
 args = parser.parse_args()
 
+
+if args.copy_to_repo and not repoDir:
+    print "repository directory is not set in config's [repository] section - cannot copy to repo'"
+    sys.exit(2)
 
 m=magic.open(magic.MAGIC_MIME_TYPE)
 m.load()
@@ -64,6 +69,13 @@ def hash_file(filename, hashtype='sha1'):
         hexhash = sha1.hexdigest()
 
     return hexhash
+
+def makePathFromHash(hash):
+    # INPUT: 2ef94a0e9a4ef32fda6e10b83b1e698036b726f1
+    # Should create a usable full path for this file
+    # OUTPUT: $repoDir/2/e/f
+    output = '%s/%s/%s' %(hash[0], hash[1], hash[2])
+    return output
 
 
 def getMimeType(filename):
@@ -395,10 +407,56 @@ def putMetadataIntoDB(scanner, filehash, metaDict):
         print "<7> %i rows INSERTed for scanner %s on file %s" %(numrows, scanner, file_id)
         db.commit()
 
+def getExtension(filename):
+    extensionPos = filename.rfind('.')
+    return filename[extensionPos+1:].lower()
+
 
 def safelyImportFileIntoRepo ( filehash, extraInfo ):
-    print "importIntoRepo not implemented yet for %s" %(filehash)
-    return False
+    extension = getExtension(extraInfo['name'])
+    targetFilename = '%s/%s/%s.%s' %(repoDir, makePathFromHash(filehash), filehash, extension)
+    print "<7> safely import %s to %s" %(extraInfo['name'], targetFilename)
+    try:
+        dirExists = os.stat(os.path.dirname(targetFilename))
+    except Exception as e:
+        if e.errno == 2:
+            # No such file or directory
+            try:
+                os.makedirs(os.path.dirname(targetFilename))
+            except Exception as e:
+                print "<4> Could not create repo directory: %s" %(os.path.dirname(targetFilename))
+                print repr(e)
+                return False
+        else:
+            print repr(e)
+            return False
+
+    if os.path.exists(targetFilename):
+        # file already exists in repo
+        destHash = hash_file(targetFilename)
+        if destHash != filehash:
+            print "<4> Hash collision - a file with the same hash %s already exists in the repo - this should never happen" %(destHash)
+            return False
+        else:
+            # file in repo is the same we want to import so don't do anything
+            print "<7> %s already exists in the repo, doing nothing" %(filehash)
+            return True
+
+    # only if target does not exist yet:
+    try:
+        shutil.copy2(extraInfo['name'], targetFilename) # copy2 preserves mtime/atime
+    except Exception as e:
+        print "<5> Could not copy '%s' to '%s'" %(filename, targetFilename)
+        print repr(e)
+        return False
+
+    destHash = hash_file(targetFilename)
+    if destHash != filehash:
+        print "<5> Newly copied file has non-matching hash: original = '%s', copy = '%s'" %(filehash, destHash)
+        return False
+    else:
+        print "<7> Successfully imported %s into the repo" %(filehash)
+        return True
 
 if not db_credentials:
 	print "No database credentials, cannot run."
@@ -472,9 +530,48 @@ for mimetype in filesByMimetype:
             print "known file: %s, info: %s" %(filehash, extraInfo)
             if args.copy_to_repo  and  not extraInfo['is_in_repo']:
                 try:
-                    safelyImportFileIntoRepo(filehash, extraInfo)
+                    importedIntoRepo = safelyImportFileIntoRepo(filehash, extraInfo)
                 except Exception as e:
-                    print "Could not import file %s(%s) into repo" %(filehash, extraInfo['filename'])
+                    print repr(e)
+                    print "Could not import file %s(%s) into repo" %(filehash, extraInfo['name'])
+                else:
+                    if not importedIntoRepo:
+                        print "Could not import file %s(%s) into repo" %(filehash, extraInfo['name'])
+                    else:
+                        try:
+                            affected_rows = c.execute('UPDATE files SET is_in_repo=True WHERE id=%s', [extraInfo['id']])
+                        except:
+                            print "Could not update DB status for file %s (id %s)" %(filehash, extraInfo['id'])
+                        else:
+                            print "%i rows updated for file %i" %(affected_rows, extraInfo['id'])
+                            extraInfo['is_in_repo'] = True
+                            known[filehash]['is_in_repo'] = True
+                db.commit()
+            if args.delete_original  and  extraInfo['is_in_repo']:
+                extension = getExtension(extraInfo['name'])
+                targetFilename = '%s/%s/%s.%s' %(repoDir, makePathFromHash(filehash), filehash, extension)
+                if os.path.exists(targetFilename)  and  hash_file(targetFilename) == filehash:
+                    print "<6> We have a valid copy of %s in the repo, going to delete %s" %(filehash, extraInfo['name'])
+                    try:
+                        os.unlink(extraInfo['name'])
+                    except Exception as e:
+                        print "Could not delete original %s" %(extraInfo['name'])
+                        print repr(e)
+                    else:
+                        print "<6> Successfully deleted original of %s (%s)" %(filehash, extraInfo['name'])
+                else:
+                    print "<4> A file that we think is in the repo does not exist - NOT deleting original: %s" %(filehash)
+                    try:
+                        importedIntoRepo = safelyImportFileIntoRepo(filehash, extraInfo)
+                    except Exception as e:
+                        print repr(e)
+                        print "Could not import file %s(%s) into repo" %(filehash, extraInfo['name'])
+                    else:
+                        if not importedIntoRepo:
+                            print "Could not import file %s(%s) into repo" %(filehash, extraInfo['name'])
+                        else:
+                            print "<5> Re-imported file %s into the repo" %(filehash)
+
 
         #print "not found in Repo: %s" %("\n".join(notKnown))
         #print "already in Repo: %s" %("\n".join(known))
@@ -517,15 +614,15 @@ for mimetype in filesByMimetype:
             print "list of files to scan with %s: %s" %(plugin, list_of_files_to_scan)
             if list_of_files_to_scan:
                 metadata = regScan[plugin].scanBulk(list_of_files_to_scan)
+                finish = time.time()
+                time_taken = finish - begin
+                if time_taken <= 0:
+                    files_per_second = -1  # avoid division by zero
+                else:
+                    files_per_second = len(filesByMimetype[mimetype]) / float(time_taken)
+                print "plugin %s took %0.2f seconds to parse %i files (%0.1f files per second)" %(plugin, time_taken, len(filesByMimetype[mimetype]), files_per_second)
             else:
                 metadata = False
-            finish = time.time()
-            time_taken = finish - begin
-            if time_taken <= 0:
-                files_per_second = -1  # avoid division by zero
-            else:
-                files_per_second = len(filesByMimetype[mimetype]) / float(time_taken)
-            print "plugin %s took %0.2f seconds to parse %i files (%0.1f files per second)" %(plugin, time_taken, len(filesByMimetype[mimetype]), files_per_second)
             if metadata:
                 for filename, metaDict in metadata.iteritems():
                     if filename in hashByFilename:
