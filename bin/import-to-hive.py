@@ -600,6 +600,7 @@ for mimetype in filesByMimetype:
             begin = time.time()
             list_of_files_to_scan = []
             for filename in filesByMimetype[mimetype]:
+                filehash = None
                 if filename in hashByFilename:
                     filehash = hashByFilename[filename]
                     if filehash in known:
@@ -610,7 +611,13 @@ for mimetype in filesByMimetype:
                                 if plugin in fmd:
                                     print "Not scanning file %s with scanner %s, already have data in DB" %(filename, plugin)
                                     continue
-                list_of_files_to_scan.append(filename)
+                if filehash  and  filehash in known:
+                    if known[filehash]['is_in_repo']:
+                        extension = getExtension(extraInfo['name'])
+                        targetFilename = '%s/%s/%s.%s' %(repoDir, makePathFromHash(filehash), filehash, extension)
+                        list_of_files_to_scan.append(targetFilename)
+                else:
+                    list_of_files_to_scan.append(filename)
             print "list of files to scan with %s: %s" %(plugin, list_of_files_to_scan)
             if list_of_files_to_scan:
                 metadata = regScan[plugin].scanBulk(list_of_files_to_scan)
@@ -627,6 +634,8 @@ for mimetype in filesByMimetype:
                 for filename, metaDict in metadata.iteritems():
                     if filename in hashByFilename:
                         filehash = hashByFilename[filename]
+                    elif filename.startswith(repoDir):
+                        filehash = os.path.basename(filename)[1:os.path.basename(filename).rfind('.')]
                     else:
                         print "file %s - no hash found, skip" %(filename)
                         continue
@@ -638,7 +647,7 @@ for mimetype in filesByMimetype:
                         print repr(e)
                     else:
                         print "<7> successfully updated metadata for %s" %(filename)
-                    print "%s: %s: %s" %(filename, filesBasicInfo[filename], metaDict)
+                    print "%s: %s" %(filename, metaDict)
 
     else:
         if args.verbose:
