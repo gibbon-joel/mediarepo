@@ -4,9 +4,11 @@ We promise you a pony.
 
 
 ## Requisites:
+```
 apt install python-flask
 pip install htsql
 pip install HTSQL-MYSQL
+```
 
 
 ## API:
