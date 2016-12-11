@@ -147,26 +147,6 @@ def GetFiles():
         return result
         #return "Logged in successfully"
 
-@api.route("/Authenticate")
-def Authenticate():
-    try:
-        username = request.args.get('UserName')
-    except:
-        username = None
-    try:
-        password = request.args.get('Password')
-    except:
-        password = None
-
-    try:
-        c.execute("SELECT * from User where Username=%s and Password=%s", [username, password])
-        data = c.fetchone()
-    except:
-        data = None
-    if data is None:
-        return "Username or Password is wrong"
-    else:
-        return "Logged in successfully"
 
 if __name__ == "__main__":
     #api.run(host='0.0.0.0')
