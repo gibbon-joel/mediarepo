@@ -29,4 +29,13 @@ CREATE TABLE `metadata` (
       KEY `tagvalue_float` (`tagvalue_float`),
       KEY `tagvalue_date` (`tagvalue_date`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
-    
+CREATE TABLE `original_filenames` (
+      `id` bigint(20) NOT NULL AUTO_INCREMENT,
+      `file_id` bigint(20) NOT NULL,
+      `original_filename` varchar(255) DEFAULT NULL,
+      `inserted_at` datetime DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (`id`),
+      KEY `file_id` (`file_id`),
+      KEY `original_filename` (`original_filename`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+

@@ -130,6 +130,7 @@ def getRepoStateForFiles(filenames_dict):
     As we do not want to hash everything again if it's known but not stored in the repo, we will
     rely on os.stat + filename as a rough initial check, only hashing if we do not find an exact match...
     """
+    original_filenames_by_hash = {}
     for filename, filedata in filenames_dict.iteritems():
         sql = "SELECT id, sha1, file_size, original_ctime as ctime, original_mtime as mtime, is_in_repo FROM files WHERE file_size=%s and original_ctime=%s and original_mtime=%s and original_filename=%s"
 
@@ -144,8 +145,10 @@ def getRepoStateForFiles(filenames_dict):
                 print "<6> Exactly one match for stat-params for %s found in DB, using hash %s from DB" %(filename, row['sha1'])
                 filenames_dict[filename]['hash.sha1'] = row['sha1']
         else:
-            print "<6> File %s not known yet - hash it" %(filename)
-            filenames_dict[filename]['hash.sha1'] = hash_file(filename)
+            print "<6> File %s not known yet by name/size/mtime - hash it" %(filename)
+            myhash = hash_file(filename)
+            filenames_dict[filename]['hash.sha1'] = myhash
+            original_filenames_by_hash[myhash] = filename
 
 
 
@@ -165,10 +168,26 @@ def getRepoStateForFiles(filenames_dict):
     rows = c.fetchall()
     # ({'sha1': '463699b9bc849c94e0f45ff2f21b171d2d128bec', 'id': 284L, 'file_size': None},)
     known = {}
+    #print "******"
+    #print "Original filenames by hash:"
+    #print original_filenames_by_hash
+    #print "******"
     for row in rows:
         if row['sha1'] in hash_lookup  and  'name' in hash_lookup[row['sha1']]:
-            #print hash_lookup[row['sha1']]
-            filename = hash_lookup[row['sha1']]['name']
+            print "%s: %s " %(row['sha1'], hash_lookup[row['sha1']])
+            myhash = row['sha1']
+            filename = hash_lookup[myhash]['name']
+            print "%s: %s " %(myhash, filename)
+            #if myhash in original_filenames_by_hash  and filename != original_filenames_by_hash[myhash]:
+            if filename != row['original_filename']:
+                # file is known by a different original name in DB
+                print "<5> Found new original name %s for the known file %s (%s)" %(row['original_filename'], myhash, filename)
+                existing_original_name = c.execute('SELECT * FROM original_filenames WHERE file_id=%s AND original_filename=%s', [row['id'], filename])
+                if existing_original_name < 1:
+                    c.execute('INSERT INTO original_filenames (file_id, original_filename) VALUES (%s, %s)', [row['id'], filename])
+                    print "<6> Alternate name %s for %s added to DB" %(filename, myhash)
+                else:
+                    print "<7> Alternate name %s already known for %s" %(filename, myhash)
         else:
             filename = 'unknown filename'
         known[row['sha1']] = {
@@ -179,6 +198,7 @@ def getRepoStateForFiles(filenames_dict):
                 'id': row['id'],
                 'is_in_repo': row['is_in_repo']
                 }
+    db.commit() # for any original_filenames changes
     notKnown = {}
     for hashvalue, value in hash_lookup.iteritems():
         if hashvalue not in known:
