@@ -79,10 +79,14 @@ def CreateCollectionTable():
     query = """SELECT file_id, tagname, tagvalue, tagvalue_float, tagvalue_date FROM metadata WHERE """
     query_where=[]
     sql_values=[]
+    scanner_tagname_dict = {}
     data = None
     try:
         for kv in m:
             scanner, tagname = kv.split('|')
+            if not scanner in scanner_tagname_dict:
+                scanner_tagname_dict[scanner] = {}
+            scanner_tagname_dict[scanner][tagname] = True
             query_where.append('(tagname=%s AND scanner=%s)')
             sql_values.append(tagname)
             sql_values.append(scanner)
@@ -94,22 +98,33 @@ def CreateCollectionTable():
         data = None
     else:
         temp_table = {}
+        begin = time.time()
         c.execute(query, sql_values)
+        rows = 0
         while True:
             row = c.fetchone()
+            rows += 1
             if row is None:
                 break
             if row['file_id'] not in temp_table:
                 temp_table[row['file_id']] = {}
             if row['tagvalue_date']:
                 val = row['tagvalue_date']
+                val_type = 'date'
             elif row['tagvalue_float']:
                 val = row['tagvalue_float']
+                val_type = 'float'
             else:
                 val = row['tagvalue']
-            temp_table[row['file_id']][row['tagname']] = val
+                val_type = 'string'
+            temp_table[row['file_id']][row['tagname']] = {val_type: val}
         #return "\n".join(temp_table)
-        result = jsonify(results=temp_table)
+        time_taken = time.time() - begin
+        stats = {}
+        stats['total_time_ms'] = '%4.2f' %(time_taken * 1000)
+        stats['total_rows'] = rows
+        stats['total_files'] = len(temp_table)
+        result = jsonify({'results' : temp_table, 'stats': stats} )
         return result
 
 
