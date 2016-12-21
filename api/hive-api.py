@@ -51,6 +51,77 @@ def GetFilesByMetadataViaHTSQL(htquery):
     return jsonify(results=rows)
     return htquery
 
+
+@api.route("/CreateCollectionTable/")
+def CreateCollectionTable():
+    """
+    we want: a list of scanner:tagname that we're interested in, to create a table containing each scanner:tagname tuple as a column + file_id
+    | file_id | scanner1:tagname1 | scanner1:tagname2 | scanner2:tagname1 |
+    we then fill that table with individual SELECTs into the metadata table
+    ( and then? create a SQL table and use HTSQL? Hmm.. )
+    """
+    m = request.args.getlist('m') # "metadata", as key-value dict
+    try:
+        # use "ServerSide DictCursor" as result sets could potentially be very large?!
+        db = MySQLdb.connect(user=db_credentials['db_username'], passwd=db_credentials['db_password'], db=db_credentials['db_name'],           cursorclass=MySQLdb.cursors.SSDictCursor)
+    except Exception as e:
+        print "Could not connect to SQL Server"
+        print repr(e)
+        sys.exit(2)
+
+    try:
+        c = db.cursor()
+    except Exception as e:
+        print "Could not acquire a DB cursor"
+        print repr(e)
+        sys.exit(3)
+    #query = 'SELECT * FROM metadata WHERE 1 AND '
+    query = """SELECT file_id, tagname, tagvalue, tagvalue_float, tagvalue_date FROM metadata WHERE """
+    query_where=[]
+    sql_values=[]
+    data = None
+    try:
+        for kv in m:
+            scanner, tagname = kv.split('|')
+            query_where.append('(tagname=%s AND scanner=%s)')
+            sql_values.append(tagname)
+            sql_values.append(scanner)
+        query = '%s %s ' %(query, ' OR '.join(query_where))
+        #return "\n".join(sql_values)
+        #return  query + "\n".join(sql_values)
+    except Exception as e:
+        raise
+        data = None
+    else:
+        temp_table = {}
+        c.execute(query, sql_values)
+        while True:
+            row = c.fetchone()
+            if row is None:
+                break
+            if row['file_id'] not in temp_table:
+                temp_table[row['file_id']] = {}
+            if row['tagvalue_date']:
+                val = row['tagvalue_date']
+            elif row['tagvalue_float']:
+                val = row['tagvalue_float']
+            else:
+                val = row['tagvalue']
+            temp_table[row['file_id']][row['tagname']] = val
+        #return "\n".join(temp_table)
+        result = jsonify(results=temp_table)
+        return result
+
+
+
+    if data is None:
+        return "Error"
+    else:
+        return result
+
+
+
+
 @api.route("/GetFilesByMetadata/")
 def GetFilesByMetadata():
     """

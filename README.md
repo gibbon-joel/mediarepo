@@ -18,6 +18,8 @@ python /usr/src/metahive/api/hive-api.py
 example1:
 http://api.metahive/GetFilesByMetadataViaHTSQL/metadata%7Btagname,%20tagvalue%7D.sort(tagname)%3Ffile_id=707
 
+http://api.metahive/CreateCollectionTable/?m=exifscanner|EXIF:ExifImageWidth&m=exifscanner|EXIF:ExifImageHeight&m=exifscanner|EXIF:CreateDate&m=exifscanner|EXIF:ApertureValue
+
 ## Config: /etc/metahive/metahive.conf
 ```
 [database]
